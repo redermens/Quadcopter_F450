@@ -1,0 +1,112 @@
+
+
+
+1.将模块连接GND、RX、TX、3.3（接口在板子角落），连接摄像头，连接OLED
+
+
+
+2.发送配置信息以启动模块，发送配置信息以下面函数send_init发送（stm32下）:
+void USART1_SendChar(unsigned char ch)
+{
+	int i;
+	USART_SendData(USART1,ch);
+	while(USART_GetFlagStatus(USART1,USART_FLAG_TC)==RESET); 
+	for(i=0;i<2000;i++);  //如果发送出问题，要改一下这里的延时,f103要减少延时
+}
+/*注：
+red,green,blue,yellow分别表示四种颜色色相角度。                0~255，推荐值254,173,118,210
+rad为误差半径，值越大限定越小允许误差越大。                    0~255，推荐值30
+minBright为亮度阈值，低于该阈值的像素点默认没有颜色（黑）。    0~255，推荐值16
+minColorDif为色差阈值，低于该阈值的像素点默认也没有颜色（白）。0~253，推荐值20
+*/
+void send_init(unsigned char red,unsigned char green,unsigned char blue,unsigned char yellow,
+    unsigned char rad,unsigned char minBright,unsigned char minColorDif)
+{
+	USART1_SendChar(0x01);
+	USART1_SendChar(red);USART1_SendChar(green);USART1_SendChar(blue);USART1_SendChar(yellow);
+	USART1_SendChar(rad);USART1_SendChar(minBright);USART1_SendChar(minColorDif);
+	USART1_SendChar(0xfe);
+}
+
+
+
+3.配置信息发送成功后，模块红灯亮起，说明正常启动了。我们可以给模块发送一个字符来控制所要找的颜色。
+USART1_SendChar('r');  //找红色
+USART1_SendChar('g');  //找绿色
+USART1_SendChar('b');  //找蓝色
+USART1_SendChar('y');  //找黄色
+
+
+
+4.用串口接收中断来获得模块传来的数据，注意串口波特率9600
+  以下为串口配置函数（stm32下）,bps=9600,PrePriority=0,SubPriority=0即可
+void USART1_Init(int bps,int PrePriority,int SubPriority)
+{
+	NVIC_InitTypeDef NVIC_InitStructure;
+	GPIO_InitTypeDef GPIO_InitStructure;
+	USART_InitTypeDef USART_InitStructure;
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
+	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = PrePriority;
+	NVIC_InitStructure.NVIC_IRQChannelSubPriority = SubPriority;  
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&NVIC_InitStructure);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1,ENABLE);
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA,ENABLE);
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9|GPIO_Pin_10;	//A9,A10
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA,&GPIO_InitStructure);    
+	GPIO_PinAFConfig(GPIOA,GPIO_PinSource9,GPIO_AF_USART1);	//A9,TX
+	GPIO_PinAFConfig(GPIOA,GPIO_PinSource10,GPIO_AF_USART1);	//A10,RX
+	USART_InitStructure.USART_BaudRate = bps;
+	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+	USART_InitStructure.USART_StopBits = USART_StopBits_1;
+	USART_InitStructure.USART_Parity = USART_Parity_No;
+	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+	USART_Init(USART1,&USART_InitStructure);
+	USART_ClearFlag(USART1, USART_IT_RXNE);
+	USART_ITConfig(USART1,USART_IT_RXNE,ENABLE);
+	USART_ITConfig(USART1,USART_IT_IDLE,ENABLE);
+	USART_Cmd(USART1,ENABLE);
+}
+//为接收中断定义几个全局变量
+int pos=0;
+int x;                       //x表示目标横坐标，0~159中心80，未找到时x=0
+int y;                       //y表示目标纵坐标，0~119中心60  未找到时y=0
+int s;                       //s表示目面积，>70
+unsigned char recv_buf[30];
+void USART1_IRQHandler(void)
+{
+	if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+	{
+		recv_buf[pos++] = USART_ReceiveData(USART1);
+	} 
+	else if(USART_GetITStatus(USART1,USART_IT_IDLE) != RESET)
+	{
+		USART1->SR;
+		USART1->DR;
+		recv_buf[pos]='\0';
+		pos = 0;  
+                //下面把接收缓冲recv_buf格式化到x,y,s变量中
+                sscanf((char*)recv_buf,"x%d,y%d,s%d\n",&x,&y,&s);
+	} 
+}
+
+
+
+5.为确定red,green,blue,yellow四种颜色的色相角度，本模块提供调试模式。
+  按住红色按键开机（红色按键在开机后5秒内都处于按下状态），进入色相调试模式。
+需要如下步骤完成色相提取：
+（1）通过按红色键来改变亮度阈值（dispTh），直到能够看到待提取颜色的色块。
+（2）将长十字中心对准色块。
+（3）得到   color:色相角度，gray:灰度值。
+（4）记录、更改配置，重启运行。
+  
+
+
+
+
+
+

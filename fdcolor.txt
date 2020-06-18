@@ -1,0 +1,267 @@
+/*
+fdcolor
+*/
+#include <stdio.h>
+#include "arm_math.h"
+#include "stm32f4xx.h"
+#include "cfg_func_f407.h"
+#include "sd_card.h"
+#include "fat_func.h"
+#include "usbd_msc_core.h"
+#include "usbd_usr.h"
+#include "usbd_desc.h"
+#include "usbd_conf.h"
+#include "oledSPI.h"
+#include "sram.h"
+#include "dbg.h"
+#include "ov7670.h"
+#include "recgImg.h"
+#include "colordvd.h"
+#include "binary.h"
+#include "mMapConnect.h"
+
+
+//======================usb-sd-fatfs var=========================
+USB_OTG_CORE_HANDLE USB_OTG_dev;
+extern vu8 USB_STATUS_REG;
+extern vu8 bDeviceState;
+u8 offline_cnt=0;
+u8 tct=0;
+u8 USB_STA;
+u8 Divece_STA;
+FATFS SD_FATFS;
+FIL fsrc, fdst;
+UINT br,bw;
+//===========================================================
+
+//01 fe ad 77 d3 15 10 14 fe
+unsigned char red=254,green=173,blue=120,yellow=210,rad=30,minBright=16,minColorDif=20;
+int x,y;
+int min_x,min_y;
+int color=FD_BLUE; //当前要找颜色
+int res_x,res_y,res_s; //结果横纵坐标与面积
+
+int uart_pos=0;
+unsigned char uart_buf[30];
+int init_ok=0;
+
+void get_para(u8 *red,u8 *green,u8 *blue,u8 *yellow,u8 *rad,u8 *minBright,u8 *minColorDif)
+{
+	while(1)
+	{
+		if(!KEY_READ)
+		{
+			while(!KEY_READ);
+			break;
+		}
+		if((uart_buf[0]==0x01)&&(uart_buf[8]==0xfe))
+		{
+			*red=uart_buf[1];
+			*green=uart_buf[2];
+			*blue=uart_buf[3];
+			*yellow=uart_buf[4];
+			*rad=uart_buf[5];
+			*minBright=uart_buf[6];
+			*minColorDif=uart_buf[7];
+			break;
+		}
+	}
+	init_ok=1;
+}
+
+
+void USART1_IRQHandler(void)
+{
+	unsigned char ch;
+	if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+	{
+		if(init_ok)
+		{
+			ch=USART_ReceiveData(USART1);
+			if((ch=='r')||(ch=='g')||(ch=='b')||(ch=='y'))
+			 color=ch;
+		}
+		else uart_buf[uart_pos++] = USART_ReceiveData(USART1);
+	} 
+	else if(USART_GetITStatus(USART1,USART_IT_IDLE) != RESET)
+	{
+		USART1->SR;
+		USART1->DR;
+		if(!init_ok)
+		{
+		  uart_buf[uart_pos]='\0';
+		  uart_pos = 0;
+		}
+	} 
+}
+
+int main(void)
+{
+	int res,i,j,min_value,value;
+	unsigned char str[30];
+	unsigned short rgb565;
+	unsigned char gray;
+	
+	NIVC_GROUP_CFG;
+	
+	LED_GREEN_INIT;LED_GREEN_OFF;
+	LED_RED_INIT;LED_RED_OFF;
+	KEY_INIT;
+	
+	FSMC_SRAM_Init();
+	OLED_Init();
+	Ov7670_SysClock_Init();
+	while(!check_camera());
+	OV7670_Reg_Init();
+  OV7670_DCMI_Init(DCMI_CaptureMode_Continuous,0,1);
+  OV7670_DMA_LineCircular(0,0);
+	USART1_Init(9600,1,1);
+	
+	if(KEY_READ) //若没有按键按下，正常启动
+	{
+		//等待串口配置参数进入
+		LCD_P6x8Str(0,0,(u8*)"wait set ..."); 
+		get_para(&red,&green,&blue,&yellow,&rad,&minBright,&minColorDif);
+		LCD_CLS();
+		sprintf((char*)str,"r:%d",red);
+		LCD_P6x8Str(0,0,(u8*)str); 
+		sprintf((char*)str,"g:%d",green);
+		LCD_P6x8Str(0,1,(u8*)str); 
+		sprintf((char*)str,"b:%d",blue);
+		LCD_P6x8Str(0,2,(u8*)str); 
+		sprintf((char*)str,"y:%d",yellow);
+		LCD_P6x8Str(0,3,(u8*)str); 
+		sprintf((char*)str,"rad:%d",rad);
+		LCD_P6x8Str(0,4,(u8*)str); 
+		sprintf((char*)str,"minBright:%d",minBright);
+		LCD_P6x8Str(0,5,(u8*)str); 
+		sprintf((char*)str,"minColorDif:%d",minColorDif);
+		LCD_P6x8Str(0,6,(u8*)str); 
+		LCD_P6x8Str(0,7,(u8*)"wait init ..."); 
+		color_table_init(red,green,blue,yellow,rad,minBright,minColorDif);
+		LCD_CLS();
+		
+		//启动colorfd
+		DCMI_Start();
+    CameraStart();
+		LED_RED_ON;
+    while(1)
+    {
+	    if(IsCameraReady())
+	    {
+		    CameraStart();
+				
+				//颜色转换
+			  for(i=0;i<120;i++)
+			  {
+			    for(j=0;j<160;j++)
+			    {
+					  rgb565=OV7670_Frame[NOW_USE_FRAME][i][j];
+					  OV7670_Frame[NOW_USE_FRAME][i][j]=(color_recg_table[rgb565>>11][(rgb565>>5)&0x3f][rgb565&0x1f]==color?255:0);
+				  }
+			  }
+				
+				//膨胀处理
+				binary_expand16((unsigned short*)OV7670_Frame[NOW_USE_FRAME],120,160,3);
+				
+				//图像打入显存
+				for(i=0;i<60;i++)
+			  {
+			    for(j=0;j<80;j++)
+			    {
+					  if(OV7670_Frame[NOW_USE_FRAME][i*2][j*2])
+						  OLED_DrawPoint(j,i,1);
+					  else
+						  OLED_DrawPoint(j,i,0);
+				  }
+			  }
+				
+				//找到最近点
+				for(i=0;i<120;i++)
+			  {
+			    for(j=0;j<160;j++)
+			    {
+						OV7670_Frame[NOW_USE_FRAME][i][j]=OV7670_Frame[NOW_USE_FRAME][i][j]?0:255;
+				  }
+			  }
+				getMapConnect16((u16*)OV7670_Frame[NOW_USE_FRAME],160,120);
+				min_value=9999999;
+				min_y=min_x=0;
+		    for(i=1;i<ptArCt;i++)
+		    {
+			    if(ptAr[i]._un.type2.counts>70)
+			    {
+				    y=ptAr[i]._un.type2.ypos;
+				    x=ptAr[i]._un.type2.xpos;
+				    value=(0-y)*(0-y)+(160/2-x)*(160/2-x);
+				    if(value<min_value)
+				    {
+					    min_y=y;
+					    min_x=x;
+					    min_value=value;
+					    res_s=ptAr[i]._un.type2.counts;
+				    }
+			    }
+		    }
+				res_x=min_x;
+				res_y=min_y;
+				for(i=0;i<60;i++) OLED_DrawPoint(res_x/2,i,1);
+				for(i=0;i<80;i++) OLED_DrawPoint(i,res_y/2,1);
+				
+				
+				//串口发送
+				sprintf((char*)str,"x%d,y%d,s%d\n",res_x,res_y,res_s);
+				for(i=0;str[i]!='\0';i++) USART1_SendChar(str[i]);
+				
+				//显示
+			  OLED_Refresh_Gram();
+				sprintf((char*)str,"%c  ",color);     LCD_P6x8Str(85,0,str);
+				sprintf((char*)str,"x:%d  ",res_x);   LCD_P6x8Str(85,1,str); 
+				sprintf((char*)str,"y:%d  ",res_y);   LCD_P6x8Str(85,2,str); 
+				sprintf((char*)str,"s:%d  ",res_s);   LCD_P6x8Str(85,3,str);	
+	    }
+	  }
+	}
+	else  //按下调试按键，显示摄像头中心色相
+	{
+		DCMI_Start();
+    CameraStart();
+		gray=128;
+		while(1)
+    {
+			if(!KEY_READ) {gray+=10;while(!KEY_READ);}
+	    if(IsCameraReady())
+	    {
+		    CameraStart();
+		    for(i=0;i<60;i++)
+			  {
+			    for(j=0;j<80;j++)
+			    {
+					  if(ColorGetGray(OV7670_Frame[NOW_USE_FRAME][i*2][j*2])>gray)
+						  OLED_DrawPoint(j,i,1);
+					  else
+						  OLED_DrawPoint(j,i,0);
+				  }
+			  }
+			  for(i=0;i<60;i++) OLED_DrawPoint(40,i,1);
+			  for(i=0;i<80;i++) OLED_DrawPoint(i,30,1);
+			  OLED_Refresh_Gram();
+			  rgb565=OV7670_Frame[NOW_USE_FRAME][60][80];
+			  res=color_get((rgb565>>11)<<3,((rgb565>>5)&0x3f)<<2,(rgb565&0x1f)<<3,16,20);
+				LCD_P6x8Str(85,0,(u8*)"color:"); 
+			  if(res>0)
+				  sprintf((char*)str,"%d",res);
+			  else
+				  sprintf((char*)str,"---  ");
+			  LCD_P6x8Str(85,1,str); 
+				LCD_P6x8Str(85,2,(u8*)"gray:"); 
+				sprintf((char*)str,"%d  ",ColorGetGray(OV7670_Frame[NOW_USE_FRAME][60][80]));
+			  LCD_P6x8Str(85,3,str); 
+				LCD_P6x8Str(85,4,(u8*)"dspTh:"); 
+				sprintf((char*)str,"%d  ",gray);
+				LCD_P6x8Str(85,5,str);
+	    }
+	  }
+	}
+}
+

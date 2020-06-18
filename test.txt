@@ -1,0 +1,141 @@
+
+#include <stdio.h>
+#include "arm_math.h"
+#include "stm32f4xx.h"
+#include "cfg_func_f407.h"
+#include "sd_card.h"
+#include "fat_func.h"
+#include "usbd_msc_core.h"
+#include "usbd_usr.h"
+#include "usbd_desc.h"
+#include "usbd_conf.h"
+#include "oledSPI.h"
+#include "sram.h"
+#include "dbg.h"
+
+//======================usb-sd-fatfs var=========================
+USB_OTG_CORE_HANDLE USB_OTG_dev;
+extern vu8 USB_STATUS_REG;
+extern vu8 bDeviceState;
+u8 offline_cnt=0;
+u8 tct=0;
+u8 USB_STA;
+u8 Divece_STA;
+FATFS SD_FATFS;
+FIL fsrc, fdst;
+UINT br,bw;
+//===========================================================
+
+void init_all(void);
+void usb_sd_fatfs_ckloop(void);
+void sram_camera_ckloop(void);
+
+int main(void)
+{
+	init_all();
+	if(KEY_READ) sram_camera_ckloop();
+	else usb_sd_fatfs_ckloop();
+	while(1);
+}
+
+void init_all(void)
+{
+	NIVC_GROUP_CFG;
+	LED_GREEN_INIT;LED_GREEN_OFF;
+	LED_RED_INIT;LED_RED_OFF;
+	KEY_INIT;
+	OLED_Init();
+}
+
+void usb_sd_fatfs_ckloop(void)
+{
+	int g;
+	LED_GREEN_OFF;
+	LCD_CLS();
+	LCD_P6x8Str(0,0,(unsigned char*)"check sdcard ..."); 
+	while(1)
+	{
+		g=SD_Init(SDIO_INTPRIO_CFG);
+		if(g==0) break;
+		Delay_ms(30);	
+	}
+	LCD_P6x8Str(0,1,(unsigned char*)"ok"); 
+	LED_GREEN_ON;
+	USBD_Init(&USB_OTG_dev,USB_OTG_FS_CORE_ID,&USR_desc,&USBD_MSC_cb,&USR_cb);
+	Delay_ms(1800);	
+	while(1)
+	{
+		Delay_ms(1);
+		if(USB_STA!=USB_STATUS_REG)
+		{
+			if(USB_STATUS_REG&0x01)
+			{
+			}
+			if(USB_STATUS_REG&0x02)
+			{
+			}
+			if(USB_STATUS_REG&0x04)
+			{
+			}
+			else
+			{
+			}
+			if(USB_STATUS_REG&0x08)
+			{
+			}
+			else
+			{
+			}
+			USB_STA=USB_STATUS_REG;
+		}
+		if(Divece_STA!=bDeviceState) 
+		{
+			if(bDeviceState==1)
+			{
+			}
+			else
+			{
+			}
+			Divece_STA=bDeviceState;
+		}
+		tct++;
+		if(tct==200)
+		{
+			tct=0;
+			if(USB_STATUS_REG&0x10)
+			{
+				offline_cnt=0;
+				bDeviceState=1;
+			}else
+			{
+				offline_cnt++;  
+				if(offline_cnt>10)bDeviceState=0;
+			}
+			USB_STATUS_REG=0;
+		}
+	}
+} 
+
+void sram_camera_ckloop(void)
+{
+	int res;
+	FSMC_SRAM_Init();
+  LCD_P6x8Str(0,0,(unsigned char*)"check sram ..."); 
+	res=FSMC_SRAM_check51216();
+	if(res) LCD_P6x8Str(0,1,(unsigned char*)"ok");
+	else
+	{
+		LCD_P6x8Str(0,1,(unsigned char*)"error");while(1);
+	}
+	while(1)
+	{
+		LED_RED_ON;
+		Delay_ms(100);
+		LED_RED_OFF;
+		Delay_ms(100);
+	}
+}
+
+
+
+
