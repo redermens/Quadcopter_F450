@@ -26,6 +26,7 @@ static void sys_init()
 	//SD_FATFS_INIT();
 	OLED_Init();
 	//LCD_P6x8Str(0,0,"MPU_Init");
+	Delay_ms(500);
 	MPU9250_Init();
 	pwm_init();
 
@@ -88,19 +89,20 @@ static void Param_Show(int i)
 
 static void Param_Send()
 {
-//		f_data[0] = gyro_filter.x;
-//		f_data[1] = gyro_filter.y;
-//		f_data[2] = gyro_filter.z;
-//		f_data[3] = gyroRaw.x;
-//		f_data[4] = gyroRaw.y;
-//		f_data[5] = gyroRaw.z;
+		f_data[0] = gyro_filter.x;
+		f_data[1] = gyro_filter.y;
+		f_data[2] = gyro_filter.z;
+//		f_data[0] = gyroRaw.x;
+//		f_data[1] = gyroRaw.y;
+//		f_data[2] = gyroRaw.z;
 	
-		f_data[0] = acc_filter.x;
-		f_data[1] = acc_filter.y;
-		f_data[2] = acc_filter.z;
-		f_data[3] = accRaw.x;
-		f_data[4] = accRaw.y;
-		f_data[5] = accRaw.z;
+		
+		f_data[3] = acc_filter.x;
+		f_data[4] = acc_filter.y;
+		f_data[5] = acc_filter.z;
+//		f_data[3] = accRaw.x;
+//		f_data[4] = accRaw.y;
+//		f_data[5] = accRaw.z;
 		
 		f_data[6] = Pitch;
 		f_data[7] = Roll;
@@ -114,7 +116,7 @@ static void Param_Send()
 		
 	
 		//vcan_send_wave((uint8_t*)c_data,12);
-		vcan_send_wave((uint8_t*)f_data,24);
+		vcan_send_wave((uint8_t*)f_data,32);
 }
 
 uint8_t key_flag=0;
@@ -152,6 +154,7 @@ static void NV_Operation()
 	
 	if(ms20_flag)
 	{
+		
 		Param_Show(0);
 		Param_Send();
 

@@ -63,6 +63,7 @@ void TIM3_IRQHandler(void)
 		static uint8_t ms20_count=0,ms100_count=0;
 		ms20_count++;
 		ms5_flag=1;
+		
 		if(ms20_count==4)
 		{
 			ms20_count=0;

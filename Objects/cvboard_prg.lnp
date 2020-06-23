@@ -1,7 +1,7 @@
 --cpu Cortex-M4.fp
-".\objects\main.o"
 ".\objects\sd_card.o"
 ".\objects\oledspi.o"
+".\objects\main.o"
 ".\objects\soft_iic.o"
 ".\objects\dev_mpu9250.o"
 ".\objects\misc.o"

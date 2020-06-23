@@ -12,7 +12,7 @@
 #include "dev_mpu9250.h"
 #include "Soft_IIC.h"
 
-#define MAGUSE
+//#define MAGUSE
 #define Imu_Sampling_Freq  200
 
 float Pitch, Roll, Yaw;
@@ -140,20 +140,24 @@ float LPButterworth(float curr_input, Butter_BufferData* Buffer, Butter_Paramete
  */
 #define ACC_SENSITIVITY     (2048.0f) // 32767.0f / 8.0f
 #define GYRO_SENSITIVITY    (32.767f)   // 32767.0f / 2000.0f
-
+//#define ICM20602
 
 void icm20602_self1_check(void)
 {
 	uint8_t dat = 0;
+#ifdef ICM20602
+	while(0x12 != dat)   //读取ICM20602 ID
+    {
+        dat = i2c_read_reg(ICM20602_DEV_ADDR,ICM20602_WHO_AM_I);
+        Delay_ms(10);
+    }
+#else
 	while (0x71 != dat)   //读取ICM20602 ID
 	{
-		dat = simiic_read_reg(MPU9250_DEV_ADDR, WHO_AM_I, IIC);
+		dat = i2c_read_reg(MPU9250_DEV_ADDR, WHO_AM_I);
 		Delay_ms(10);
-		//卡在这里原因有以下几点
-		//1 MPU6050坏了，如果是新的这样的概率极低
-		//2 接线错误或者没有接好
-		//3 可能你需要外接上拉电阻，上拉到3.3V
 	}
+#endif
 }
 
 
@@ -167,7 +171,7 @@ void MPU_Offset_Init()
 	{
 		uint8_t dat[6];
 
-		simiic_read_regs(MPU9250_DEV_ADDR, GYRO_XOUT_H, dat, 6, IIC);
+		i2c_read_regs(MPU9250_DEV_ADDR, GYRO_XOUT_H, dat, 6);
 		tmp_x += (int16_t)((uint16_t)dat[0] << 8 | dat[1]);
 		tmp_y += (int16_t)((uint16_t)dat[2] << 8 | dat[3]);
 		tmp_z += (int16_t)((uint16_t)dat[4] << 8 | dat[5]);
@@ -188,12 +192,28 @@ void MPU9250_Init(void)
 
 	icm20602_self1_check();
 
-	simiic_write_reg(MPU9250_DEV_ADDR, PWR_MGMT_1, 0x00);      // 解除休眠状态
-	simiic_write_reg(MPU9250_DEV_ADDR, SMPLRT_DIV, 0x07);      // 采样率, 8kHz / (1 + SMPLRT_DIV)
-	simiic_write_reg(MPU9250_DEV_ADDR, CONFIG, 0x02);
-	simiic_write_reg(MPU9250_DEV_ADDR, GYRO_CONFIG, 0x10);
-	simiic_write_reg(MPU9250_DEV_ADDR, ACCEL_CONFIG, 0x18);
-	simiic_write_reg(MPU9250_DEV_ADDR, ACCEL_CONFIG2, 0x00);    //加速度采样频率460HZ
+#ifdef ICM20602
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_PWR_MGMT_1,0x80);               //复位设备
+//    Delay_ms(2);                                                        //延时
+//    while(0x80 & simiic_read_reg(ICM20602_DEV_ADDR,ICM20602_PWR_MGMT_1,IIC));//等待复位完成
+//    
+//    //配置参数
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_PWR_MGMT_1,0x01);               //时钟设置
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_PWR_MGMT_2,0x00);               //开启陀螺仪和加速度计
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_CONFIG,0x01);                   //176HZ 1KHZ
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_SMPLRT_DIV,0x07);               //采样速率 SAMPLE_RATE = INTERNAL_SAMPLE_RATE / (1 + SMPLRT_DIV)
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_GYRO_CONFIG,0x18);              //±2000 dps
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_ACCEL_CONFIG,0x10);             //±8g
+//    simiic_write_reg(ICM20602_DEV_ADDR,ICM20602_ACCEL_CONFIG_2,0x23); 
+#else
+	i2c_write_reg(MPU9250_DEV_ADDR, PWR_MGMT_1, 0x00);      // 解除休眠状态
+	i2c_write_reg(MPU9250_DEV_ADDR, SMPLRT_DIV, 0x00);      // 采样率, 8kHz / (1 + SMPLRT_DIV)
+	i2c_write_reg(MPU9250_DEV_ADDR, CONFIG, 0x02);
+	i2c_write_reg(MPU9250_DEV_ADDR, GYRO_CONFIG, 0x10);
+	i2c_write_reg(MPU9250_DEV_ADDR, ACCEL_CONFIG, 0x18);
+	i2c_write_reg(MPU9250_DEV_ADDR, ACCEL_CONFIG2, 0x00);    //加速度采样频率460HZ
+#endif
+	Delay_ms(300);
 
 //    simiic_write_reg(MPU9250_DEV_ADDR, USER_CTRL, 0x00);
 //    simiic_write_reg(MPU9250_DEV_ADDR, INT_PIN_CFG, 0x02);
@@ -212,12 +232,15 @@ void MPU9250_Init(void)
 /**
  * @description: 采集一次陀螺仪和加速度计的值
  */
-static void GetData()
+void GetData()
 {
 	uint8_t dat[6];
 
-
-	simiic_read_regs(MPU9250_DEV_ADDR, GYRO_XOUT_H, dat, 6, IIC);
+#ifdef ICM20602
+	i2c_read_regs(ICM20602_DEV_ADDR, ICM20602_GYRO_XOUT_H, dat, 6);  
+#else
+	i2c_read_regs(MPU9250_DEV_ADDR, GYRO_XOUT_H, dat, 6);
+#endif
 	gyro.x = (int16_t)((uint16_t)dat[0] << 8 | dat[1]) - gyro_offset.x;
 	gyro.y = (int16_t)((uint16_t)dat[2] << 8 | dat[3]) - gyro_offset.y;
 	gyro.z = (int16_t)((uint16_t)dat[4] << 8 | dat[5]) - gyro_offset.z;
@@ -229,8 +252,11 @@ static void GetData()
 	gyroRaw.x = gyro.x / GYRO_SENSITIVITY;// 翻滚角角速度
 	gyroRaw.y = gyro.y / GYRO_SENSITIVITY;// 俯仰角角速度
 	gyroRaw.z = gyro.z / GYRO_SENSITIVITY;// 偏航角角速度
-//	
-	simiic_read_regs(MPU9250_DEV_ADDR, ACCEL_XOUT_H, dat, 6, IIC);
+#ifdef ICM20602
+	i2c_read_regs(ICM20602_DEV_ADDR, ICM20602_ACCEL_XOUT_H, dat, 6);  
+#else	
+	i2c_read_regs(MPU9250_DEV_ADDR, ACCEL_XOUT_H, dat, 6);
+#endif
 	acc.x = (int16_t)((uint16_t)dat[0] << 8 | dat[1]);
 	acc.y = (int16_t)((uint16_t)dat[2] << 8 | dat[3]);
 	acc.z = (int16_t)((uint16_t)dat[4] << 8 | dat[5]);
@@ -243,6 +269,12 @@ static void GetData()
 	accRaw.x = (float)acc.x; // 向前的加速度
 	accRaw.y = (float)acc.y; // 左右的加速度
 	accRaw.z = (float)acc.z; // 向下的加速度
+	
+#ifdef ICM20602
+	i2c_read_regs(ICM20602_DEV_ADDR, ICM20602_ACCEL_XOUT_H, dat, 6);  
+#else	
+	i2c_read_regs(MPU9250_DEV_ADDR, ACCEL_XOUT_H, dat, 6);
+#endif	
 
 
 	//滤波
@@ -324,7 +356,7 @@ static void imuComputeRotationMatrix()
  //
  //分析得挺详细的
  //一阶龙格库塔公式里n为什么消失了不太理解
-static void AHRS(Vector3F gyro_raw, Vector3F acc_raw, Vector3F mag_raw, float dt)
+static void MagwickAHRS(Vector3F gyro_raw, Vector3F acc_raw, Vector3F mag_raw, float dt)
 {
 	float normalise;
 	float ex, ey, ez;
@@ -413,7 +445,7 @@ void MPU9250_GetInfo(void)
 
 	//imuUpdate(gyroRaw, accRaw, MPU_TIM_COUNT_CYCLE);
 
-	imuUpdate(gyro_filter, acc_filter, magRaw, MPU_TIM_COUNT_CYCLE);
+	MagwickAHRS(gyro_filter, acc_filter, magRaw, MPU_TIM_COUNT_CYCLE);
 
 	/*计算roll pitch yaw 欧拉角*/
 	Pitch = asinf(AHRS_Param.rMat[2][0]) * RAD2DEG;
